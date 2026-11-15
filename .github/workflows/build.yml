@@ -1,0 +1,134 @@
+name: Build ffmpeg libs
+
+on:
+  workflow_dispatch:
+    inputs:
+      ffmpeg_version:
+        description: FFmpeg version (must match the headers White Bot compiles against; just a label when ffmpeg_repo is set)
+        default: '8.1.2'
+      ffmpeg_repo:
+        description: Optional git URL of an ffmpeg fork to build instead of the release tarball
+        default: ''
+      ffmpeg_ref:
+        description: Branch, tag or commit sha of the fork (used with ffmpeg_repo)
+        default: 'master'
+      gpl:
+        description: Also build libx264 (GPL, makes the package GPL)
+        type: boolean
+        default: false
+      win_hw:
+        description: Windows - build NVENC and AMF encoders
+        type: boolean
+        default: true
+      revision:
+        description: Package revision (r<N> in the file name)
+        default: '1'
+      release:
+        description: Publish a GitHub release with the package
+        type: boolean
+        default: false
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+env:
+  FFMPEG_VERSION: ${{ inputs.ffmpeg_version || '8.1.2' }}
+  FFMPEG_GIT_URL: ${{ inputs.ffmpeg_repo || '' }}
+  FFMPEG_GIT_REF: ${{ inputs.ffmpeg_ref || 'master' }}
+  WITH_X264: ${{ inputs.gpl && '1' || '0' }}
+  WITH_WIN_HW: ${{ (inputs.win_hw == false) && '0' || '1' }}
+  REVISION: ${{ inputs.revision || '1' }}
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        abi: [arm64-v8a, armeabi-v7a]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tools
+        run: sudo apt-get update && sudo apt-get install -y make pkg-config xz-utils
+      - name: Build
+        run: bash scripts/android.sh ${{ matrix.abi }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-android-${{ matrix.abi }}
+          path: out/
+
+  ios:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tools
+        run: brew install pkgconf nasm
+      - name: Build
+        run: bash scripts/ios.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-ios
+          path: out/
+
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tools
+        run: brew install pkgconf nasm
+      - name: Build (arm64 + x86_64, lipo)
+        run: bash scripts/macos.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-macos
+          path: out/
+
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MSYS
+          update: true
+          path-type: inherit
+          install: >-
+            make diffutils pkgconf nasm git curl tar xz
+      - name: Use MSVC link.exe instead of MSYS2's
+        run: mv /usr/bin/link.exe /usr/bin/link.exe.bak || true
+      - name: Build
+        run: bash scripts/windows.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-windows
+          path: out/
+
+  package:
+    needs: [android, ios, macos, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: ffmpeg-*
+          path: merged
+          merge-multiple: true
+      - name: Package
+        run: bash scripts/package.sh merged dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: white-bot-ffmpeg
+          path: dist/
+      - name: Release
+        if: ${{ inputs.release || startsWith(github.ref, 'refs/tags/') }}
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
