@@ -1,222 +1,363 @@
-MAIN_MAKEFILE=1
-include ffbuild/config.mak
 
-vpath %.c    $(SRC_PATH)
-vpath %.cpp  $(SRC_PATH)
-vpath %.h    $(SRC_PATH)
-vpath %.inc  $(SRC_PATH)
-vpath %.m    $(SRC_PATH)
-vpath %.S    $(SRC_PATH)
-vpath %.asm  $(SRC_PATH)
-vpath %.rc   $(SRC_PATH)
-vpath %.v    $(SRC_PATH)
-vpath %.texi $(SRC_PATH)
-vpath %.glsl $(SRC_PATH)
-vpath %.spv  $(SRC_PATH)
-vpath %.cu   $(SRC_PATH)
-vpath %.ptx  $(SRC_PATH)
-vpath %.metal $(SRC_PATH)
-vpath %/fate_config.sh.template $(SRC_PATH)
+ifneq ($(strip $(KEEP)),)
+ifneq ($(strip $(KEEP)),0)
+# KEEP_FILES is normally undefined; it is set to 2 # if the user requested
+# to keep all intermediate FATE-files by setting KEEP.
+# For some tests it is also set to 1 if it is unset; this indicates
+# that only some intermediate files (namely only non-raw files)
+# are to be kept. This allows reusing these intermediate files as input
+# files for other tests (mostly the seek-tests).
+KEEP_FILES = 2
+endif
+endif
 
-TESTTOOLS   = audiogen videogen rotozoom tiny_psnr tiny_ssim base64 audiomatch
-HOSTPROGS  := $(TESTTOOLS:%=tests/%) doc/print_options
+THREADS = 1
+VREF = tests/vsynth1/00.pgm
+AREF = tests/data/asynth1.sw
 
-ALLFFLIBS =            \
-    avcodec            \
-    avdevice           \
-    avfilter           \
-    avformat           \
-    avutil             \
-    swscale            \
-    swresample         \
+FATEW = 34
+FATEH = 34
 
-# $(FFLIBS-yes) needs to be in linking order
-FFLIBS-$(CONFIG_AVDEVICE)   += avdevice
-FFLIBS-$(CONFIG_AVFILTER)   += avfilter
-FFLIBS-$(CONFIG_AVFORMAT)   += avformat
-FFLIBS-$(CONFIG_AVCODEC)    += avcodec
-FFLIBS-$(CONFIG_SWRESAMPLE) += swresample
-FFLIBS-$(CONFIG_SWSCALE)    += swscale
+FFMPEG=ffmpeg$(PROGSSUF)$(EXESUF)
 
-FFLIBS := avutil
+$(AREF): CMP=
 
-DATA_FILES := $(wildcard $(SRC_PATH)/presets/*.ffpreset) $(SRC_PATH)/doc/ffprobe.xsd
+APITESTSDIR := tests/api
+FATE_OUTDIRS = tests/data tests/data/fate tests/data/filtergraphs tests/data/maps tests/data/streamgroups tests/data/lavf tests/data/lavf-fate tests/data/pixfmt tests/vsynth1 $(APITESTSDIR)
+OUTDIRS += $(FATE_OUTDIRS)
 
-SKIPHEADERS = compat/w32pthreads.h
+$(VREF): tests/videogen$(HOSTEXESUF) | tests/vsynth1
+	$(M)./$< 'tests/vsynth1/'
 
-# first so "all" becomes default target
-all: all-yes
+$(AREF): tests/audiogen$(HOSTEXESUF) | tests/data
+	$(M)./$< $@
 
-include $(SRC_PATH)/tools/Makefile
-include $(SRC_PATH)/ffbuild/common.mak
+tests/data/asynth-%.wav: tests/audiogen$(HOSTEXESUF) | tests/data
+	$(M)./$< $@ $(subst -, ,$*)
 
-FF_EXTRALIBS := $(FFEXTRALIBS)
-FF_DEP_LIBS  := $(DEP_LIBS)
-FF_STATIC_DEP_LIBS := $(STATIC_DEP_LIBS)
+tests/data/vsynth1.yuv: tests/videogen$(HOSTEXESUF) | tests/data
+	$(M)$< $@
 
-$(TOOLS): %$(EXESUF): %.o
-	$(call LINK,$(LDFLAGS) $(LDEXEFLAGS) $(LD_O) $(filter-out $(FF_DEP_LIBS), $^) $(EXTRALIBS-$(*F)) $(EXTRALIBS) $(ELIBS))
+tests/data/vsynth2.yuv: tests/rotozoom$(HOSTEXESUF) | tests/data
+	$(M)$< $(SRC_PATH)/tests/reference.pnm $@
 
-target_dec_%_fuzzer$(EXESUF): target_dec_%_fuzzer.o $(FF_DEP_LIBS)
-	$(call LINK,$(LDFLAGS) $(LDEXEFLAGS) $(LD_O) $^ $(ELIBS) $(FF_EXTRALIBS) $(LIBFUZZER_PATH))
+tests/data/vsynth_lena.yuv: tests/rotozoom$(HOSTEXESUF) | tests/data
+	$(M)$< $(SAMPLES)/lena.pnm $@
 
-target_enc_%_fuzzer$(EXESUF): target_enc_%_fuzzer.o $(FF_DEP_LIBS)
-	$(call LINK,$(LDFLAGS) $(LDEXEFLAGS) $(LD_O) $^ $(ELIBS) $(FF_EXTRALIBS) $(LIBFUZZER_PATH))
+tests/data/vsynth3.yuv: tests/videogen$(HOSTEXESUF) | tests/data
+	$(M)$< $@ $(FATEW) $(FATEH)
 
-tools/target_bsf_%_fuzzer$(EXESUF): tools/target_bsf_%_fuzzer.o $(FF_DEP_LIBS)
-	$(call LINK,$(LDFLAGS) $(LDEXEFLAGS) $(LD_O) $^ $(ELIBS) $(FF_EXTRALIBS) $(LIBFUZZER_PATH))
+tests/test_copy.ffmeta: TAG = COPY
+tests/test_copy.ffmeta: tests/data
+	$(M)cp -f $(SRC_PATH)/tests/test.ffmeta tests/test_copy.ffmeta
 
-target_dem_%_fuzzer$(EXESUF): target_dem_%_fuzzer.o $(FF_DEP_LIBS)
-	$(call LINK,$(LDFLAGS) $(LDEXEFLAGS) $(LD_O) $^ $(ELIBS) $(FF_EXTRALIBS) $(LIBFUZZER_PATH))
+tests/data/%.sw tests/data/asynth% tests/data/vsynth%.yuv tests/vsynth%/00.pgm tests/data/%.nut: TAG = GEN
 
-tools/target_dem_fuzzer$(EXESUF): tools/target_dem_fuzzer.o $(FF_DEP_LIBS)
-	$(call LINK,$(LDFLAGS) $(LDEXEFLAGS) $(LD_O) $^ $(ELIBS) $(FF_EXTRALIBS) $(LIBFUZZER_PATH))
+tests/data/filtergraphs/%: TAG = COPY
+tests/data/filtergraphs/%: $(SRC_PATH)/tests/filtergraphs/% | tests/data/filtergraphs
+	$(M)cp $< $@
 
-tools/target_io_dem_fuzzer$(EXESUF): tools/target_io_dem_fuzzer.o $(FF_DEP_LIBS)
-	$(call LINK,$(LDFLAGS) $(LDEXEFLAGS) $(LD_O) $^ $(ELIBS) $(FF_EXTRALIBS) $(LIBFUZZER_PATH))
+tests/data/maps/%: TAG = COPY
+tests/data/maps/%: $(SRC_PATH)/tests/maps/% | tests/data/maps
+	$(M)cp $< $@
 
-tools/target_sws_fuzzer$(EXESUF): tools/target_sws_fuzzer.o $(FF_DEP_LIBS)
-	$(call LINK,$(LDFLAGS) $(LDEXEFLAGS) $(LD_O) $^ $(ELIBS) $(FF_EXTRALIBS) $(LIBFUZZER_PATH))
+tests/data/streamgroups/%: TAG = COPY
+tests/data/streamgroups/%: $(SRC_PATH)/tests/streamgroups/% | tests/data/streamgroups
+	$(M)cp $< $@
 
-tools/target_swr_fuzzer$(EXESUF): tools/target_swr_fuzzer.o $(FF_DEP_LIBS)
-	$(call LINK,$(LDFLAGS) $(LDEXEFLAGS) $(LD_O) $^ $(ELIBS) $(FF_EXTRALIBS) $(LIBFUZZER_PATH))
+RUNNING_FATE := $(filter check fate%,$(filter-out fate-rsync,$(MAKECMDGOALS)))
 
-tools/enum_options$(EXESUF): ELIBS = $(FF_EXTRALIBS)
-tools/enum_options$(EXESUF): $(FF_DEP_LIBS)
-tools/enc_recon_frame_test$(EXESUF): $(FF_DEP_LIBS)
-tools/enc_recon_frame_test$(EXESUF): ELIBS = $(FF_EXTRALIBS)
-tools/scale_slice_test$(EXESUF): $(FF_DEP_LIBS)
-tools/scale_slice_test$(EXESUF): ELIBS = $(FF_EXTRALIBS)
-tools/sofa2wavs$(EXESUF): ELIBS = $(FF_EXTRALIBS)
-tools/uncoded_frame$(EXESUF): $(FF_DEP_LIBS)
-tools/uncoded_frame$(EXESUF): ELIBS = $(FF_EXTRALIBS)
-tools/target_dec_%_fuzzer$(EXESUF): $(FF_DEP_LIBS)
-tools/target_dem_%_fuzzer$(EXESUF): $(FF_DEP_LIBS)
+# Check sanity of dependencies when running FATE tests.
+ifneq (,$(RUNNING_FATE))
+CHKCFG  = $(if $($(1))$(!$(1)),$($(1)), $(error No such config: $(1)))
+endif
 
-CONFIGURABLE_COMPONENTS =                                           \
-    $(wildcard $(FFLIBS:%=$(SRC_PATH)/lib%/all*.c))                 \
-    $(SRC_PATH)/libavcodec/bitstream_filters.c                      \
-    $(SRC_PATH)/libavcodec/hwaccels.h                               \
-    $(SRC_PATH)/libavcodec/parsers.c                                \
-    $(SRC_PATH)/libavformat/protocols.c                             \
+ALLYES  = $(strip $(call XYES, $(1)))
+XYES    = $(if $(strip $(1)),                                           \
+               $(if $(call CHKCFG,CONFIG_$(firstword $(1))),            \
+                    $(call XYES, $(wordlist 2, $(words $(1)), $(1)))),  \
+               yes)
 
-config_components.h: ffbuild/.config
-ffbuild/.config: $(CONFIGURABLE_COMPONENTS)
-	@-tput bold 2>/dev/null
-	@-printf '\nWARNING: $(?) newer than config_components.h, rerun configure\n\n'
-	@-tput sgr0 2>/dev/null
+ENCDEC  = $(call ALLYES, $(firstword $(1))_ENCODER $(lastword $(1))_DECODER  \
+                         $(firstword $(2))_MUXER   $(lastword $(2))_DEMUXER  \
+                         $(3) FILE_PROTOCOL)
 
-SUBDIR_VARS := CLEANFILES FFLIBS HOSTPROGS TESTPROGS TOOLS               \
-               HEADERS ARCH_HEADERS BUILT_HEADERS SKIPHEADERS            \
-               ARMV5TE-OBJS ARMV6-OBJS ARMV8-OBJS VFP-OBJS NEON-OBJS     \
-               ALTIVEC-OBJS VSX-OBJS X86ASM-OBJS                         \
-               MIPSFPU-OBJS MIPSDSPR2-OBJS MIPSDSP-OBJS MSA-OBJS         \
-               MMI-OBJS LSX-OBJS LASX-OBJS RV-OBJS RVV-OBJS RVVB-OBJS    \
-               OBJS SHLIBOBJS STLIBOBJS HOSTOBJS TESTOBJS SIMD128-OBJS   \
-               SVE-OBJS SVE2-OBJS SME-OBJS SME2-OBJS
+ENCDEC2 = $(call ALLYES, $(firstword $(1))_ENCODER $(lastword $(1))_DECODER  \
+                         $(firstword $(2))_ENCODER $(lastword $(2))_DECODER  \
+                         $(firstword $(3))_MUXER   $(lastword $(3))_DEMUXER  \
+                         $(4) FILE_PROTOCOL)
 
-define RESET
-$(1) :=
-$(1)-yes :=
-endef
+# RAWVIDEO_ENCODER and PCM_S16LE_ENCODER corresponds to the default codecs
+# for framecrc. These requirements are not always necessary.
+TRANSCODE = $(call ALLYES, $(firstword $(1))_ENCODER $(lastword $(1))_DECODER \
+                           $(firstword $(2))_MUXER   $(lastword $(2))_DEMUXER \
+                           $(3) FILE_PROTOCOL PIPE_PROTOCOL RAWVIDEO_ENCODER  \
+                           PCM_S16LE_ENCODER FRAMECRC_MUXER)
 
-define DOSUBDIR
-$(foreach V,$(SUBDIR_VARS),$(eval $(call RESET,$(V))))
-SUBDIR := $(1)/
-include $(SRC_PATH)/$(1)/Makefile
--include $(SRC_PATH)/$(1)/$(ARCH)/Makefile
--include $(SRC_PATH)/$(1)/$(INTRINSICS)/Makefile
-include $(SRC_PATH)/ffbuild/library.mak
-endef
+REMUX = $(call ALLYES, $(firstword $(1))_MUXER $(lastword $(1))_DEMUXER \
+                       $(2) FILE_PROTOCOL PIPE_PROTOCOL FRAMECRC_MUXER)
 
-$(foreach D,$(FFLIBS),$(eval $(call DOSUBDIR,lib$(D))))
+DEMDEC  = $(call ALLYES, $(1:%=%_DEMUXER) $(2:%=%_DECODER) $(3) FILE_PROTOCOL)
+ENCMUX  = $(call ALLYES, $(1:%=%_ENCODER) $(2:%=%_MUXER)   $(3))
 
-include $(SRC_PATH)/fftools/Makefile
-include $(SRC_PATH)/doc/Makefile
-include $(SRC_PATH)/doc/examples/Makefile
+FRAMEMD5 = $(call ALLYES, $(1:%=%_DEMUXER) $(2:%=%_DECODER) $(3)              \
+                          PCM_S16LE_ENCODER RAWVIDEO_ENCODER FRAMEMD5_MUXER   \
+                          PIPE_PROTOCOL FILE_PROTOCOL)
+FRAMECRC = $(call ALLYES, $(1:%=%_DEMUXER) $(2:%=%_DECODER) $(3)              \
+                          PCM_S16LE_ENCODER RAWVIDEO_ENCODER FRAMECRC_MUXER   \
+                          PIPE_PROTOCOL FILE_PROTOCOL)
+CRC = $(call ALLYES, $(1:%=%_DEMUXER) $(2:%=%_DECODER) $(3)              \
+                          PCM_S16LE_ENCODER RAWVIDEO_ENCODER CRC_MUXER   \
+                          PIPE_PROTOCOL FILE_PROTOCOL)
 
-$(ALLFFLIBS:%=lib%/version.o): libavutil/ffversion.h
+# Variant of DEMDEC for use with the "pcm" command.
+PCM = $(call ALLYES, $(1:%=%_DEMUXER) $(2:%=%_DECODER)  $(3) FILE_PROTOCOL    \
+                     PCM_S16LE_ENCODER PCM_S16LE_MUXER PIPE_PROTOCOL)
 
-$(PROGS): %$(PROGSSUF)$(EXESUF): %$(PROGSSUF)_g$(EXESUF)
-ifeq ($(STRIPTYPE),direct)
-	$(STRIP) -o $@ $<
+DEMMUX  = $(call ALLYES, $(1:%=%_DEMUXER) $(2:%=%_MUXER) $(3) FILE_PROTOCOL)
+
+# Variant of FRAMECRC for the cases with -lavfi where no demuxer is involved.
+FILTERFRAMECRC     = $(call ALLYES, $(1:%=%_FILTER) $(2) PCM_S16LE_ENCODER    \
+                                    RAWVIDEO_ENCODER FRAMECRC_MUXER PIPE_PROTOCOL)
+# Specialization of FRAMECRC to be used when filtering is involved.
+FILTERDEMDEC       = $(call ALLYES, $(1:%=%_FILTER) $(2:%=%_DEMUXER) $(3:%=%_DECODER) \
+                                    $(4) PCM_S16LE_ENCODER RAWVIDEO_ENCODER   \
+                                    FRAMECRC_MUXER FILE_PROTOCOL PIPE_PROTOCOL)
+FILTERDEMDECENCMUX = $(call ALLYES, $(1:%=%_FILTER) $(2:%=%_DEMUXER) $(3:%=%_DECODER) $(4:%=%_ENCODER) $(5:%=%_MUXER) $(6) FILE_PROTOCOL)
+
+PARSERDEM          = $(call ALLYES, $(1:%=%_PARSER) $(2:%=%_DEMUXER) $(3) FILE_PROTOCOL)
+
+PARSERDEMDEC       = $(call ALLYES, $(1:%=%_PARSER) $(2:%=%_DEMUXER) $(3:%=%_DECODER) $(4) FILE_PROTOCOL)
+
+# Allow overriding CONFIG_LARGE_TESTS via LARGE_TESTS, if set on the
+# make command line.
+ifeq ($(LARGE_TESTS), yes)
+CONFIG_LARGE_TESTS:=yes
+!CONFIG_LARGE_TESTS:=
+else ifeq ($(LARGE_TESTS), no)
+CONFIG_LARGE_TESTS:=
+!CONFIG_LARGE_TESTS:=yes
+endif
+
+include $(SRC_PATH)/$(APITESTSDIR)/Makefile
+
+include $(SRC_PATH)/tests/fate/acodec.mak
+include $(SRC_PATH)/tests/fate/vcodec.mak
+
+include $(SRC_PATH)/tests/fate/lavf-audio.mak
+include $(SRC_PATH)/tests/fate/lavf-container.mak
+include $(SRC_PATH)/tests/fate/lavf-image.mak
+include $(SRC_PATH)/tests/fate/lavf-image2pipe.mak
+include $(SRC_PATH)/tests/fate/lavf-video.mak
+# Must be included after acodec.mak, vcodec.mak and lavf-*.mak
+include $(SRC_PATH)/tests/fate/seek.mak
+
+include $(SRC_PATH)/tests/fate/aac.mak
+include $(SRC_PATH)/tests/fate/ac3.mak
+include $(SRC_PATH)/tests/fate/adpcm.mak
+include $(SRC_PATH)/tests/fate/alac.mak
+include $(SRC_PATH)/tests/fate/als.mak
+include $(SRC_PATH)/tests/fate/amrnb.mak
+include $(SRC_PATH)/tests/fate/amrwb.mak
+include $(SRC_PATH)/tests/fate/api.mak
+include $(SRC_PATH)/tests/fate/apng.mak
+include $(SRC_PATH)/tests/fate/apv.mak
+include $(SRC_PATH)/tests/fate/atrac.mak
+include $(SRC_PATH)/tests/fate/audio.mak
+include $(SRC_PATH)/tests/fate/av1.mak
+include $(SRC_PATH)/tests/fate/bmp.mak
+include $(SRC_PATH)/tests/fate/build.mak
+include $(SRC_PATH)/tests/fate/caf.mak
+include $(SRC_PATH)/tests/fate/canopus.mak
+include $(SRC_PATH)/tests/fate/cbs.mak
+include $(SRC_PATH)/tests/fate/cdxl.mak
+include $(SRC_PATH)/tests/fate/checkasm.mak
+# Must be included after lavf-container.mak
+include $(SRC_PATH)/tests/fate/concatdec.mak
+include $(SRC_PATH)/tests/fate/cover-art.mak
+include $(SRC_PATH)/tests/fate/dca.mak
+include $(SRC_PATH)/tests/fate/demux.mak
+include $(SRC_PATH)/tests/fate/dfa.mak
+include $(SRC_PATH)/tests/fate/dnxhd.mak
+include $(SRC_PATH)/tests/fate/dpcm.mak
+include $(SRC_PATH)/tests/fate/dvvideo.mak
+include $(SRC_PATH)/tests/fate/ea.mak
+include $(SRC_PATH)/tests/fate/exif.mak
+include $(SRC_PATH)/tests/fate/enc_external.mak
+# Must be included after lavf-video.mak
+include $(SRC_PATH)/tests/fate/ffmpeg.mak
+include $(SRC_PATH)/tests/fate/ffprobe.mak
+include $(SRC_PATH)/tests/fate/fifo-muxer.mak
+include $(SRC_PATH)/tests/fate/filter-audio.mak
+# Must be included after vcodec.mak
+include $(SRC_PATH)/tests/fate/filter-video.mak
+include $(SRC_PATH)/tests/fate/fits.mak
+include $(SRC_PATH)/tests/fate/flac.mak
+include $(SRC_PATH)/tests/fate/flvenc.mak
+include $(SRC_PATH)/tests/fate/gapless.mak
+include $(SRC_PATH)/tests/fate/gif.mak
+include $(SRC_PATH)/tests/fate/h264.mak
+include $(SRC_PATH)/tests/fate/hap.mak
+include $(SRC_PATH)/tests/fate/hevc.mak
+include $(SRC_PATH)/tests/fate/hlsenc.mak
+include $(SRC_PATH)/tests/fate/hw.mak
+include $(SRC_PATH)/tests/fate/iamf.mak
+include $(SRC_PATH)/tests/fate/id3v2.mak
+include $(SRC_PATH)/tests/fate/image.mak
+include $(SRC_PATH)/tests/fate/imf.mak
+include $(SRC_PATH)/tests/fate/indeo.mak
+include $(SRC_PATH)/tests/fate/jpeg2000.mak
+include $(SRC_PATH)/tests/fate/jxl.mak
+include $(SRC_PATH)/tests/fate/libavcodec.mak
+include $(SRC_PATH)/tests/fate/libavdevice.mak
+include $(SRC_PATH)/tests/fate/libavformat.mak
+include $(SRC_PATH)/tests/fate/libavutil.mak
+include $(SRC_PATH)/tests/fate/libswresample.mak
+include $(SRC_PATH)/tests/fate/libswscale.mak
+include $(SRC_PATH)/tests/fate/lossless-audio.mak
+include $(SRC_PATH)/tests/fate/lossless-video.mak
+include $(SRC_PATH)/tests/fate/matroska.mak
+include $(SRC_PATH)/tests/fate/microsoft.mak
+include $(SRC_PATH)/tests/fate/monkeysaudio.mak
+include $(SRC_PATH)/tests/fate/mov.mak
+include $(SRC_PATH)/tests/fate/mp3.mak
+include $(SRC_PATH)/tests/fate/mpc.mak
+include $(SRC_PATH)/tests/fate/mpeg4.mak
+include $(SRC_PATH)/tests/fate/mpegps.mak
+include $(SRC_PATH)/tests/fate/mpegts.mak
+include $(SRC_PATH)/tests/fate/mxf.mak
+include $(SRC_PATH)/tests/fate/ogg-vorbis.mak
+include $(SRC_PATH)/tests/fate/ogg-flac.mak
+include $(SRC_PATH)/tests/fate/ogg-opus.mak
+include $(SRC_PATH)/tests/fate/oma.mak
+include $(SRC_PATH)/tests/fate/opus.mak
+include $(SRC_PATH)/tests/fate/pcm.mak
+include $(SRC_PATH)/tests/fate/pixfmt.mak
+include $(SRC_PATH)/tests/fate/pixlet.mak
+include $(SRC_PATH)/tests/fate/probe.mak
+include $(SRC_PATH)/tests/fate/prores.mak
+include $(SRC_PATH)/tests/fate/qoa.mak
+include $(SRC_PATH)/tests/fate/qt.mak
+include $(SRC_PATH)/tests/fate/qtrle.mak
+include $(SRC_PATH)/tests/fate/real.mak
+include $(SRC_PATH)/tests/fate/screen.mak
+include $(SRC_PATH)/tests/fate/segafilm.mak
+include $(SRC_PATH)/tests/fate/segment.mak
+include $(SRC_PATH)/tests/fate/source.mak
+include $(SRC_PATH)/tests/fate/spdif.mak
+include $(SRC_PATH)/tests/fate/speedhq.mak
+include $(SRC_PATH)/tests/fate/subtitles.mak
+include $(SRC_PATH)/tests/fate/truehd.mak
+include $(SRC_PATH)/tests/fate/utvideo.mak
+include $(SRC_PATH)/tests/fate/vbn.mak
+include $(SRC_PATH)/tests/fate/video.mak
+include $(SRC_PATH)/tests/fate/voice.mak
+include $(SRC_PATH)/tests/fate/vorbis.mak
+include $(SRC_PATH)/tests/fate/vpx.mak
+include $(SRC_PATH)/tests/fate/vqf.mak
+include $(SRC_PATH)/tests/fate/vvc.mak
+include $(SRC_PATH)/tests/fate/wavpack.mak
+include $(SRC_PATH)/tests/fate/webm-dash-manifest.mak
+include $(SRC_PATH)/tests/fate/wma.mak
+include $(SRC_PATH)/tests/fate/xvid.mak
+
+FATE_FFMPEG += $(FATE_FFMPEG-yes) $(FATE_AVCONV) $(FATE_AVCONV-yes)
+FATE-$(CONFIG_FFMPEG) += $(FATE_FFMPEG)
+FATE_FFPROBE += $(FATE_FFPROBE-yes)
+FATE-$(CONFIG_FFPROBE) += $(FATE_FFPROBE)
+FATE-$(call ALLYES, FFMPEG FFPROBE) += $(FATE_FFMPEG_FFPROBE)
+
+FATE_SAMPLES_AVCONV           += $(FATE_SAMPLES_AVCONV-yes)
+FATE_SAMPLES_FFMPEG           += $(FATE_SAMPLES_FFMPEG-yes)
+FATE_EXTERN-$(CONFIG_FFMPEG)  += $(FATE_SAMPLES_AVCONV) $(FATE_SAMPLES_FFMPEG)
+FATE_EXTERN-$(CONFIG_FFPROBE) += $(FATE_SAMPLES_FFPROBE)
+FATE_SAMPLES_FFMPEG_FFPROBE   += $(FATE_SAMPLES_FFMPEG_FFPROBE-yes)
+FATE_EXTERN-$(call ALLYES, FFMPEG FFPROBE) += $(FATE_SAMPLES_FFMPEG_FFPROBE)
+FATE_EXTERN-yes := $(if $(CONFIG_FILE_PROTOCOL), $(FATE_EXTERN-yes))
+FATE_EXTERN                   += $(FATE_EXTERN-yes) $(FATE_SAMPLES_FASTSTART)
+
+FATE += $(FATE-yes)
+
+RSYNC_OPTIONS-$(HAVE_RSYNC_CONTIMEOUT) += --contimeout=60
+RSYNC_OPTIONS = -vrltLW --timeout=60 $(RSYNC_OPTIONS-yes)
+
+$(FATE_FFMPEG) $(FATE_FFMPEG_FFPROBE) $(FATE_SAMPLES_AVCONV) $(FATE_SAMPLES_FFMPEG) $(FATE_SAMPLES_FFMPEG_FFPROBE): ffmpeg$(PROGSSUF)$(EXESUF)
+
+$(FATE_FFPROBE) $(FATE_FFMPEG_FFPROBE) $(FATE_SAMPLES_FFPROBE) $(FATE_SAMPLES_FFMPEG_FFPROBE): ffprobe$(PROGSSUF)$(EXESUF)
+
+$(FATE_SAMPLES_FASTSTART): tools/qt-faststart$(EXESUF)
+$(FATE_SAMPLES_DUMP_DATA) $(FATE_SAMPLES_DUMP_DATA-yes): tools/venc_data_dump$(EXESUF)
+$(FATE_SAMPLES_SCALE_SLICE): tools/scale_slice_test$(EXESUF)
+$(FATE_SAMPLES_DUMP_STREAM_META): tests/api/api-dump-stream-meta-test$(EXESUF)
+
+ifdef SAMPLES
+FATE += $(FATE_EXTERN)
+fate-rsync:
+	rsync $(RSYNC_OPTIONS) rsync://fate-suite.ffmpeg.org/fate-suite/ $(SAMPLES)
 else
-	$(RM) $@
-	$(CP) $< $@
-	$(STRIP) $@
+fate::
+	@echo "warning: only a subset of the fate tests will be run because SAMPLES is not specified"
+fate-rsync:
+	@echo "use 'make fate-rsync SAMPLES=/path/to/samples' to sync the fate suite"
+$(FATE_EXTERN):
+	@echo "$@ requires external samples and SAMPLES not specified"; false
 endif
 
-%$(PROGSSUF)_g$(EXESUF): $(FF_DEP_LIBS)
-	$(call LINK,$(LDFLAGS) $(LDEXEFLAGS) $(LD_O) $(OBJS-$*) $(FF_EXTRALIBS))
+FATE_UTILS = base64 tiny_psnr tiny_ssim audiomatch
 
-VERSION_SH  = $(SRC_PATH)/ffbuild/version.sh
-ifeq ($(VERSION_TRACKING),yes)
-GIT_LOG     = $(SRC_PATH)/.git/logs/HEAD
-endif
+TOOL = ffmpeg
 
-.version: $(wildcard $(GIT_LOG)) $(VERSION_SH) ffbuild/config.mak
-.version: M=@
+$(addprefix fate-, $(IGNORE_TESTS)): REPORT=ignore
 
-ifneq ($(VERSION_TRACKING),yes)
-libavutil/ffversion.h .version: REVISION=unknown
-endif
-libavutil/ffversion.h .version:
-	$(M)revision=$(REVISION) $(VERSION_SH) $(SRC_PATH) libavutil/ffversion.h $(EXTRA_VERSION)
-	$(Q)touch .version
+fate:: $(FATE)
 
-# force version.sh to run whenever version might have changed
--include .version
+# Tests requiring hardware support are not included in a default fate run.
+fate-hw: $(FATE_HW-yes)
+FATE += $(FATE_HW-yes)
 
-install: install-libs install-headers
+$(FATE): export PROGSUF = $(PROGSSUF)
+$(FATE): export EXECSUF = $(EXESUF)
+$(FATE): export HOSTEXECSUF = $(HOSTEXESUF)
+$(FATE): $(FATE_UTILS:%=tests/%$(HOSTEXESUF)) | $(FATE_OUTDIRS)
+	@echo "TEST    $(@:fate-%=%)$(FATE_SUFFIX)"
+	$(Q)$(SRC_PATH)/tests/fate-run.sh $@$(FATE_SUFFIX) "$(TARGET_SAMPLES)" "$(TARGET_EXEC)" "$(TARGET_PATH)" '$(CMD)' '$(CMP)' '$(REF)' '$(FUZZ)' '$(THREADS)' '$(THREAD_TYPE)' '$(CPUFLAGS)' '$(CMP_SHIFT)' '$(CMP_TARGET)' '$(SIZE_TOLERANCE)' '$(CMP_UNIT)' '$(GEN)' '$(HWACCEL)' '$(REPORT)' '$(KEEP_FILES)'
 
-install-libs: install-libs-yes
+fate-list:
+	@printf '%s\n' $(sort $(FATE))
 
-install-data: $(DATA_FILES)
-	$(Q)mkdir -p "$(DATADIR)"
-	$(INSTALL) -m 644 $(DATA_FILES) "$(DATADIR)"
+fate-list-failing:
+	@! ls tests/data/fate/*.rep >/dev/null 2>&1 || awk -F: '$$2 != 0 { print "fate-" $$1 }' tests/data/fate/*.rep
 
-uninstall: uninstall-data uninstall-headers uninstall-libs uninstall-pkgconfig
+fate-clear-reports:
+	@rm -f tests/data/fate/*.rep
 
-uninstall-data:
-	$(RM) -r "$(DATADIR)"
+coverage.info: TAG = LCOV
+coverage.info:
+	$(M)lcov -q -d $(CURDIR) -b $(patsubst src%,./,$(SRC_LINK)) --capture | \
+	    sed "s,$(CURDIR)/\./,$(CURDIR)/," > $@.in
+	$(M)lcov -q --remove $@.in "/usr*" > $@
+	$(Q)$(RM) $@.in
 
-clean::
-	$(RM) $(CLEANSUFFIXES)
-	$(RM) $(addprefix compat/,$(CLEANSUFFIXES)) $(addprefix compat/*/,$(CLEANSUFFIXES)) $(addprefix compat/*/*/,$(CLEANSUFFIXES))
-	$(RM) -r coverage-html
-	$(RM) -rf coverage.info coverage.info.in lcov
+lcov:  TAG = GENHTML
+lcov: coverage.info
+	$(M)genhtml -q -o $(CURDIR)/lcov $<
 
-distclean:: clean
-	$(RM) .version config.asm config.h config_components.* mapfile  \
-		ffbuild/.config ffbuild/config.* libavutil/avconfig.h \
-		version.h libavutil/ffversion.h libavcodec/codec_names.h \
-		libavcodec/bsf_list.c libavformat/protocol_list.c \
-		libavcodec/codec_list.c libavcodec/parser_list.c \
-		libavfilter/filter_list.c libavdevice/indev_list.c libavdevice/outdev_list.c \
-		libavformat/muxer_list.c libavformat/demuxer_list.c
-ifeq ($(SRC_LINK),src)
-	$(RM) src
-endif
-	$(RM) -rf doc/examples/pc-uninstalled
+lcov-reset: TAG = LCOV
+lcov-reset:
+	$(M)lcov -q -d $(CURDIR) --zerocounters
+	$(Q)$(RM) -f coverage.info
 
-config:
-	$(SRC_PATH)/configure $(value FFMPEG_CONFIGURATION)
+clean:: testclean
 
-build: all alltools examples testprogs
-check: all alltools examples testprogs fate
+testclean::
+	$(RM) -r tests/vsynth1 tests/data tools/lavfi-showfiltfmts$(PROGSSUF)$(EXESUF)
+	$(RM) $(CLEANSUFFIXES:%=tests/%)
+	$(RM) $(TESTTOOLS:%=tests/%$(HOSTEXESUF))
+	$(RM) tests/pixfmts.mak tests/test_copy.ffmeta
 
-include $(SRC_PATH)/tests/Makefile
+-include $(wildcard tests/*.d)
 
-$(sort $(OUTDIRS)):
-	$(Q)mkdir -p $@
+include $(SRC_PATH)/tests/checkasm/Makefile
 
-# Dummy rule to stop make trying to rebuild removed or renamed headers
-%.h:
-	@:
-
-# Disable suffix rules.  Most of the builtin rules are suffix rules,
-# so this saves some time on slow systems.
-.SUFFIXES:
-
-.PHONY: all all-yes alltools build check config testprogs
-.PHONY: *clean install* uninstall*
+.PHONY: fate* lcov lcov-reset
+.INTERMEDIATE: coverage.info
