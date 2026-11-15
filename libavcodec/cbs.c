@@ -61,6 +61,7 @@ static const CodedBitstreamType *const cbs_type_table[] = {
 #if CBS_VP9
     &CBS_FUNC(type_vp9),
 #endif
+    NULL,
 };
 
 const enum AVCodecID CBS_FUNC(all_codec_ids)[] = {
@@ -105,7 +106,7 @@ av_cold int CBS_FUNC(init)(CodedBitstreamContext **ctx_ptr,
     int i;
 
     type = NULL;
-    for (i = 0; i < FF_ARRAY_ELEMS(cbs_type_table); i++) {
+    for (i = 0; cbs_type_table[i]; i++) {
         if (cbs_type_table[i]->codec_id == codec_id) {
             type = cbs_type_table[i];
             break;
