@@ -1,3 +1,4 @@
+
 name: Build ffmpeg libs
 
 on:
@@ -27,8 +28,10 @@ on:
         description: Publish a GitHub release with the package
         type: boolean
         default: false
+
   push:
-    tags: ['v*']
+    tags:
+      - 'v*'
 
 permissions:
   contents: write
@@ -47,43 +50,127 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        abi: [arm64-v8a, armeabi-v7a]
+        abi:
+          - arm64-v8a
+          - armeabi-v7a
     steps:
       - uses: actions/checkout@v4
+
       - name: Tools
-        run: sudo apt-get update && sudo apt-get install -y make pkg-config xz-utils
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y make pkg-config xz-utils
+
       - name: Build
         run: bash scripts/android.sh ${{ matrix.abi }}
-      - uses: actions/upload-artifact@v4
+
+      - name: Upload Android artifact
+        uses: actions/upload-artifact@v4
         with:
           name: ffmpeg-android-${{ matrix.abi }}
           path: out/
+          if-no-files-found: error
 
   ios:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+
       - name: Tools
-        run: brew install pkgconf nasm
+        shell: bash
+        run: |
+          brew install pkgconf nasm
+          echo "$(brew --prefix nasm)/bin" >> "$GITHUB_PATH"
+
+          echo "=== NASM ==="
+          command -v nasm
+          nasm -v
+
+          echo "=== Clang ==="
+          clang --version
+
       - name: Build
+        shell: bash
         run: bash scripts/ios.sh
-      - uses: actions/upload-artifact@v4
+
+      - name: Upload iOS artifact
+        uses: actions/upload-artifact@v4
         with:
           name: ffmpeg-ios
           path: out/
+          if-no-files-found: error
 
   macos:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
-      - name: Tools
-        run: brew install pkgconf nasm
-      - name: Build (arm64 + x86_64, lipo)
-        run: bash scripts/macos.sh
-      - uses: actions/upload-artifact@v4
+
+      - name: Install build tools
+        shell: bash
+        run: |
+          brew update
+          brew install pkgconf nasm
+
+          NASM_PREFIX="$(brew --prefix nasm)"
+          echo "$NASM_PREFIX/bin" >> "$GITHUB_PATH"
+
+      - name: Verify macOS toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=== macOS ==="
+          sw_vers
+
+          echo "=== Clang ==="
+          clang --version
+
+          echo "=== NASM ==="
+          command -v nasm
+          nasm -v
+
+          echo "=== Make ==="
+          make --version
+
+          echo "=== pkg-config ==="
+          pkg-config --version
+
+          echo "=== Lipo ==="
+          xcrun lipo -version
+
+      - name: Build macOS Universal (arm64 + x86_64)
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/macos.sh
+
+      - name: Verify macOS output
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          LIB_DIR="out/lib/macos-universal"
+
+          for lib in avformat avcodec avfilter swscale swresample avutil; do
+            FILE="$LIB_DIR/lib${lib}.a"
+
+            if [ ! -f "$FILE" ]; then
+              echo "ERROR: Missing $FILE"
+              exit 1
+            fi
+
+            echo "Checking $FILE"
+            lipo -verify_arch arm64 x86_64 "$FILE"
+          done
+
+          echo "macOS Universal libraries verified."
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
         with:
           name: ffmpeg-macos
           path: out/
+          if-no-files-found: error
 
   windows:
     runs-on: windows-latest
@@ -92,9 +179,11 @@ jobs:
         shell: msys2 {0}
     steps:
       - uses: actions/checkout@v4
+
       - uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
+
       - uses: msys2/setup-msys2@v2
         with:
           msystem: MSYS
@@ -102,31 +191,49 @@ jobs:
           path-type: inherit
           install: >-
             make diffutils pkgconf nasm git curl tar xz
+
       - name: Use MSVC link.exe instead of MSYS2's
         run: mv /usr/bin/link.exe /usr/bin/link.exe.bak || true
+
       - name: Build
         run: bash scripts/windows.sh
-      - uses: actions/upload-artifact@v4
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
         with:
           name: ffmpeg-windows
           path: out/
+          if-no-files-found: error
 
   package:
-    needs: [android, ios, macos, windows]
+    needs:
+      - android
+      - ios
+      - macos
+      - windows
+
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+
+      - name: Download platform artifacts
+        uses: actions/download-artifact@v4
         with:
           pattern: ffmpeg-*
           path: merged
           merge-multiple: true
+
       - name: Package
         run: bash scripts/package.sh merged dist
-      - uses: actions/upload-artifact@v4
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
         with:
           name: white-bot-ffmpeg
           path: dist/
+          if-no-files-found: error
+
       - name: Release
         if: ${{ inputs.release || startsWith(github.ref, 'refs/tags/') }}
         uses: softprops/action-gh-release@v2
