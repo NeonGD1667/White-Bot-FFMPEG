@@ -1,20 +1,20 @@
 
 #!/usr/bin/env bash
 #
-# Usage: scripts/macos.sh
-# Builds FFmpeg for macOS arm64 + x86_64,
-# then merges static libraries into macOS Universal using lipo.
+# White Bot - macOS Universal FFmpeg builder
+#
+# Builds:
+#   arm64
+#   x86_64
+#
+# Merges static libraries using lipo.
 #
 # Requirements:
-#   clang, make, lipo, nasm, pkg-config
+#   clang, make, nasm, pkg-config, lipo
 #
 # Environment:
-#   MIN_MAC       Minimum macOS deployment target (default: 11.0)
-#   WITH_X264     Enable x264 build when set to 1
-#
-# Output:
-#   out/lib/macos-universal/
-#   out/include/
+#   MIN_MAC=11.0
+#   WITH_X264=0|1
 
 set -Eeuo pipefail
 
@@ -22,9 +22,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
 
 MIN_MAC="${MIN_MAC:-11.0}"
+WITH_X264="${WITH_X264:-0}"
 
 # --------------------------------------------------
-# Toolchain validation
+# Toolchain
 # --------------------------------------------------
 
 require_tool() {
@@ -36,23 +37,38 @@ require_tool() {
     fi
 }
 
-for tool in clang make lipo nasm pkg-config; do
+for tool in clang make nasm pkg-config lipo; do
     require_tool "$tool"
 done
 
 NASM="$(command -v nasm)"
+LIPO="$(xcrun --find lipo)"
+
+export PATH="$(dirname "$NASM"):$PATH"
 
 echo "======================================"
-echo "White Bot - macOS FFmpeg Build"
+echo "White Bot - macOS Universal Build"
 echo "======================================"
-echo "Minimum macOS: $MIN_MAC"
-echo "NASM: $NASM"
-nasm -v
+
+echo "macOS:"
+sw_vers
+
 echo
+echo "Clang:"
 clang --version
+
 echo
+echo "NASM:"
+echo "Path: $NASM"
+nasm -v
+
+echo
+echo "pkg-config:"
 pkg-config --version
+
 echo
+echo "Minimum macOS: $MIN_MAC"
+echo "x264 enabled: $WITH_X264"
 
 # --------------------------------------------------
 # Fetch sources
@@ -60,7 +76,7 @@ echo
 
 fetch_ffmpeg
 
-if [ "${WITH_X264:-0}" = "1" ]; then
+if [ "$WITH_X264" = "1" ]; then
     fetch_x264
 fi
 
@@ -72,7 +88,7 @@ build_arch() {
     local arch="$1"
     local x264_host
     local prefix="$WORK/macos-$arch"
-    local build_dir="$WORK/ffmpeg-build-macos-$arch"
+    local ffmpeg_build="$WORK/ffmpeg-build-macos-$arch"
     local flags="-arch $arch -mmacosx-version-min=$MIN_MAC"
 
     case "$arch" in
@@ -83,7 +99,7 @@ build_arch() {
             x264_host="x86_64-apple-darwin"
             ;;
         *)
-            echo "ERROR: Unsupported macOS architecture: $arch"
+            echo "ERROR: Unsupported architecture: $arch"
             return 1
             ;;
     esac
@@ -96,30 +112,38 @@ build_arch() {
     rm -rf "$prefix"
     mkdir -p "$prefix"
 
-    # Reset common FFmpeg configuration flags for this architecture.
+    # Reset FFmpeg configuration flags.
     ffmpeg_common_flags
 
     # --------------------------------------------------
-    # Build x264 (optional)
+    # Build x264
     # --------------------------------------------------
 
-    if [ "${WITH_X264:-0}" = "1" ]; then
-        local x264_build_dir="$WORK/x264-build-macos-$arch"
+    if [ "$WITH_X264" = "1" ]; then
+        local x264_build="$WORK/x264-build-macos-$arch"
 
-        rm -rf "$x264_build_dir"
-        mkdir -p "$x264_build_dir"
+        rm -rf "$x264_build"
+        mkdir -p "$x264_build"
 
-        echo "Building x264 for $arch..."
+        echo
+        echo "======================================"
+        echo "Building x264 for $arch"
+        echo "======================================"
+
+        echo "NASM executable: $NASM"
+        "$NASM" -v
 
         (
-            cd "$x264_build_dir"
+            cd "$x264_build"
 
             export CC="clang $flags"
-            export AS="clang $flags"
+            export AS="nasm"
+            export NASM
 
             "$X264_SRC/configure" \
                 --prefix="$prefix" \
                 --host="$x264_host" \
+                --nasm="$NASM" \
                 --enable-static \
                 --enable-pic \
                 --disable-cli \
@@ -130,20 +154,22 @@ build_arch() {
         )
 
         export PKG_CONFIG_PATH="$prefix/lib/pkgconfig"
+
         FF_FLAGS+=(--pkg-config-flags=--static)
     fi
 
     # --------------------------------------------------
-    # Configure and build FFmpeg
+    # Build FFmpeg
     # --------------------------------------------------
 
-    rm -rf "$build_dir"
-    mkdir -p "$build_dir"
+    rm -rf "$ffmpeg_build"
+    mkdir -p "$ffmpeg_build"
 
+    echo
     echo "Configuring FFmpeg for $arch..."
 
     (
-        cd "$build_dir"
+        cd "$ffmpeg_build"
 
         "$FFMPEG_SRC/configure" \
             --prefix="$prefix" \
@@ -168,14 +194,14 @@ build_arch() {
 }
 
 # --------------------------------------------------
-# Build both architectures
+# Build architectures
 # --------------------------------------------------
 
 build_arch arm64
 build_arch x86_64
 
 # --------------------------------------------------
-# Merge universal static libraries
+# Create Universal libraries
 # --------------------------------------------------
 
 echo
@@ -196,38 +222,41 @@ libs=(
     avutil
 )
 
-if [ "${WITH_X264:-0}" = "1" ]; then
+if [ "$WITH_X264" = "1" ]; then
     libs+=(x264)
 fi
 
 for lib in "${libs[@]}"; do
-    arm64_lib="$WORK/macos-arm64/lib/lib${lib}.a"
-    x86_lib="$WORK/macos-x86_64/lib/lib${lib}.a"
-    output_lib="$UNIVERSAL_LIB/lib${lib}.a"
+    ARM64_LIB="$WORK/macos-arm64/lib/lib${lib}.a"
+    X86_LIB="$WORK/macos-x86_64/lib/lib${lib}.a"
+    OUTPUT_LIB="$UNIVERSAL_LIB/lib${lib}.a"
 
-    if [ ! -f "$arm64_lib" ]; then
-        echo "ERROR: Missing arm64 library: $arm64_lib"
+    if [ ! -f "$ARM64_LIB" ]; then
+        echo "ERROR: Missing arm64 library: $ARM64_LIB"
         exit 1
     fi
 
-    if [ ! -f "$x86_lib" ]; then
-        echo "ERROR: Missing x86_64 library: $x86_lib"
+    if [ ! -f "$X86_LIB" ]; then
+        echo "ERROR: Missing x86_64 library: $X86_LIB"
         exit 1
     fi
 
     echo "Merging lib${lib}.a..."
 
-    lipo -create \
-        "$arm64_lib" \
-        "$x86_lib" \
-        -output "$output_lib"
+    "$LIPO" -create \
+        "$ARM64_LIB" \
+        "$X86_LIB" \
+        -output "$OUTPUT_LIB"
 
-    lipo -verify_arch arm64 x86_64 "$output_lib"
+    "$LIPO" -verify_arch arm64 x86_64 "$OUTPUT_LIB"
 done
 
 # --------------------------------------------------
-# Copy headers
+# Copy FFmpeg headers
 # --------------------------------------------------
+
+echo
+echo "Copying FFmpeg headers..."
 
 for dir in \
     libavcodec \
@@ -237,12 +266,15 @@ for dir in \
     libswscale \
     libswresample
 do
-    if [ ! -d "$WORK/macos-arm64/include/$dir" ]; then
-        echo "ERROR: Missing FFmpeg headers: $dir"
+    HEADER_DIR="$WORK/macos-arm64/include/$dir"
+
+    if [ ! -d "$HEADER_DIR" ]; then
+        echo "ERROR: Missing FFmpeg header directory: $HEADER_DIR"
         exit 1
     fi
 
-    cp -R "$WORK/macos-arm64/include/$dir" "$OUT/include/"
+    rm -rf "$OUT/include/$dir"
+    cp -R "$HEADER_DIR" "$OUT/include/"
 done
 
 # --------------------------------------------------
@@ -254,13 +286,18 @@ Platform: macOS Universal
 Architectures: arm64, x86_64
 Minimum macOS: $MIN_MAC
 FFmpeg version: ${FFMPEG_VERSION:-unknown}
-x264 enabled: ${WITH_X264:-0}
+x264 enabled: $WITH_X264
 NASM: $(nasm -v)
 EOF
+
+# --------------------------------------------------
+# Finished
+# --------------------------------------------------
 
 echo
 echo "======================================"
 echo "macOS Universal build completed!"
 echo "======================================"
+
 echo "Libraries: $UNIVERSAL_LIB"
 echo "Headers:   $OUT/include"
