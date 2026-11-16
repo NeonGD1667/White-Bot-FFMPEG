@@ -273,7 +273,7 @@ for lib in "${libs[@]}"; do
         "$X86_LIB" \
         -output "$OUTPUT_LIB"
 
-    "$LIPO" -verify_arch arm64 x86_64 "$OUTPUT_LIB"
+    "$LIPO" "$OUTPUT_LIB" -verify_arch arm64 x86_64
     echo "  OK: $OUTPUT_LIB"
 done
 
