@@ -1,3 +1,4 @@
+
 name: Build ffmpeg libs
 
 on:
@@ -154,7 +155,7 @@ jobs:
         with:
           name: logs-macos
           path: |
-            work/**/config.log
+            work/**/*.log
             work/**/ffbuild/config.log
           if-no-files-found: ignore
 
@@ -218,7 +219,7 @@ jobs:
         with:
           name: logs-windows
           path: |
-            work/**/config.log
+            work/**/*.log
             work/**/ffbuild/config.log
           if-no-files-found: ignore
 
