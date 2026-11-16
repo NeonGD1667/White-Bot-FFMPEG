@@ -1,4 +1,3 @@
-
 #!/usr/bin/env bash
 #
 # White Bot - macOS Universal FFmpeg builder
@@ -87,6 +86,7 @@ fi
 build_arch() {
     local arch="$1"
     local x264_host
+    local x264_asm
     local prefix="$WORK/macos-$arch"
     local ffmpeg_build="$WORK/ffmpeg-build-macos-$arch"
     local flags="-arch $arch -mmacosx-version-min=$MIN_MAC"
@@ -94,9 +94,11 @@ build_arch() {
     case "$arch" in
         arm64)
             x264_host="aarch64-apple-darwin"
+            x264_asm="HAVE_AARCH64"
             ;;
         x86_64)
             x264_host="x86_64-apple-darwin"
+            x264_asm="HAVE_MMX"
             ;;
         *)
             echo "ERROR: Unsupported architecture: $arch"
@@ -136,18 +138,28 @@ build_arch() {
         (
             cd "$x264_build"
 
-            export CC="clang $flags"
-            export AS="nasm"
-            export NASM
+            # x264 chooses the assembler per architecture on its own:
+            #   x86_64 -> nasm (found in PATH, checked above)
+            #   arm64  -> the C compiler (clang's integrated assembler)
+            # So AS / ASFLAGS must NOT be set: AS=nasm breaks the arm64 sources and AS=clang
+            # breaks the x86_64 ones. x264 has no --nasm option either (it was ignored).
+            # Nothing may leak in from the environment or from the other architecture's pass;
+            # the target arch is given through --extra-*flags.
+            unset AS ASFLAGS CFLAGS CPPFLAGS CXXFLAGS LDFLAGS
+            export CC=clang
 
-            "$X264_SRC/configure" \
+            run_x264_configure "$X264_SRC/configure" \
                 --prefix="$prefix" \
                 --host="$x264_host" \
-                --nasm="$NASM" \
                 --enable-static \
                 --enable-pic \
                 --disable-cli \
-                --disable-opencl
+                --disable-opencl \
+                --extra-cflags="$flags" \
+                --extra-ldflags="$flags"
+
+            # Never build x264 silently without assembly (the "no NEON support" class of problems).
+            x264_require_asm "$x264_asm"
 
             make -j"$JOBS"
             make install

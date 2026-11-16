@@ -27,11 +27,20 @@ if [ "$WITH_WIN_HW" = "1" ]; then
              --enable-encoder=h264_nvenc,hevc_nvenc,h264_amf,hevc_amf)
 fi
 
+# MSVC (C7757) rejects libavformat/cbs.c when its CBS type table is empty. In ffmpeg 8.1,
+# libavformat/cbs.c includes libavcodec/cbs.c with only AV1 and APV left enabled (CBS_AV1 =
+# CONFIG_CBS_AV1, CBS_APV = CONFIG_CBS_APV) and the mp4/mov muxer always compiles it. With the
+# allow-list build neither is selected, so `static const CodedBitstreamType *const t[] = { };` is
+# empty: accepted by gcc/clang as an extension, an error for cl. The AV1 parser selects cbs_av1
+# (and nothing else of significance), which makes the table non-empty. This works with the
+# unpatched upstream source (release tarball) as well as with the patched fork.
+FF_FLAGS+=(--enable-parser=av1)
+
 if [ "$WITH_X264" = "1" ]; then
   fetch_x264
   rm -rf "$WORK/x264-build-win"; mkdir -p "$WORK/x264-build-win"
   ( cd "$WORK/x264-build-win"
-    CC=cl "$X264_SRC/configure" --prefix="$PREFIX" --enable-static --disable-cli --disable-opencl \
+    CC=cl run_x264_configure "$X264_SRC/configure" --prefix="$PREFIX" --enable-static --disable-cli --disable-opencl \
       --extra-cflags=-MD
     make -j"$JOBS" install
     # ffmpeg's MSVC pkg-config check looks for x264.lib
@@ -47,6 +56,13 @@ cd "$WORK/ffmpeg-build-win"
   --prefix="$PREFIX" "${FF_FLAGS[@]}" \
   --toolchain=msvc --target-os=win64 --arch=x86_64 \
   --extra-cflags="-MD -I$PREFIX/include" --extra-ldflags="-LIBPATH:$PREFIX/lib"
+
+# Guard for the cbs.c problem above: stop here, with a clear message, instead of after minutes of make.
+if ! grep -q '^#define CONFIG_CBS_AV1 1' config.h; then
+  echo "error: CONFIG_CBS_AV1 is 0, libavformat/cbs.c would have an empty table and fail with MSVC C7757" >&2
+  exit 1
+fi
+
 make -j"$JOBS"
 make install
 

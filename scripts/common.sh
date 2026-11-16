@@ -19,6 +19,53 @@ JOBS="${JOBS:-$( (nproc || sysctl -n hw.ncpu || echo 4) 2>/dev/null )}"
 
 mkdir -p "$WORK" "$OUT"
 
+# The files that are executable in upstream ffmpeg. A fork uploaded through the GitHub web UI loses the
+# +x bit (git mode 100644), and then "$FFMPEG_SRC/configure" fails with "Permission denied" (exit 126) on
+# Linux/macOS; ffbuild/*.sh and compat/windows/* are called directly by configure and the makefiles too.
+# Permanent fix in the fork: git update-index --chmod=+x <these files>; git commit; git push.
+ffmpeg_fix_exec_bits() {
+  local dir="$1" f
+  for f in \
+  compat/solaris/make_sunver.pl \
+  compat/windows/makedef \
+  compat/windows/mslink \
+  compat/windows/mswindres \
+  configure \
+  doc/doxy-wrapper.sh \
+  doc/texi2pod.pl \
+  doc/texidep.pl \
+  ffbuild/libversion.sh \
+  ffbuild/pkgconfig_generate.sh \
+  ffbuild/version.sh \
+  tests/copycooker.sh \
+  tests/fate-run.sh \
+  tests/fate.sh \
+  tests/fate/source-check.sh \
+  tools/bisect-create \
+  tools/check_arm_indent.sh \
+  tools/clean-diff \
+  tools/compare-cvelists.sh \
+  tools/dvd2concat \
+  tools/gen-rc \
+  tools/general_assembly.pl \
+  tools/indent_arm_assembly.pl \
+  tools/loudnorm.rb \
+  tools/make_chlayout_test \
+  tools/merge-all-source-plugins \
+  tools/missing_codec_desc \
+  tools/murge \
+  tools/normalize.py \
+  tools/patcheck \
+  tools/plotframes \
+  tools/source2c \
+  tools/target_dec_fate.sh \
+  tools/unwrap-diff \
+  tools/zmqshell.py
+  do
+    if [ -f "$dir/$f" ]; then chmod +x "$dir/$f"; fi
+  done
+}
+
 fetch_ffmpeg() {
   if [ -n "$FFMPEG_GIT_URL" ]; then
     FFMPEG_SRC="$WORK/ffmpeg-git"
@@ -29,6 +76,7 @@ fetch_ffmpeg() {
       git -C "$FFMPEG_SRC" fetch -q --depth 1 origin "$FFMPEG_GIT_REF"
       git -C "$FFMPEG_SRC" checkout -q FETCH_HEAD
     fi
+    ffmpeg_fix_exec_bits "$FFMPEG_SRC"
     echo "ffmpeg source: $FFMPEG_GIT_URL @ $FFMPEG_GIT_REF ($(git -C "$FFMPEG_SRC" rev-parse --short HEAD))"
     return
   fi
@@ -70,6 +118,33 @@ ffmpeg_common_flags() {
   fi
   if [ "$WITH_X264" = "1" ]; then
     FF_FLAGS+=(--enable-gpl --enable-libx264 --enable-encoder=libx264)
+  fi
+}
+
+# --- x264 helpers (used by macos.sh and windows.sh) -------------------------------------------
+
+# Runs an x264 ./configure command (the whole command line is the argument list). x264 prints only
+# the failed feature check ("no NEON support ...", "Minimum version is nasm-2.13"), so on failure the
+# real reason - the failing compiler/assembler command - is dumped from config.log.
+run_x264_configure() {
+  if ! "$@"; then
+    echo "error: x264 configure failed; config.log follows" >&2
+    if [ -f config.log ]; then
+      echo "::group::x264 config.log"
+      cat config.log
+      echo "::endgroup::"
+    fi
+    return 1
+  fi
+}
+
+# Fails when x264's configure silently ended up WITHOUT assembly (it would then build, but slowly).
+# x264_require_asm <HAVE_AARCH64 | HAVE_MMX>   (run in the x264 build directory, after configure)
+x264_require_asm() {
+  if ! grep -q "^#define $1 1" config.h; then
+    echo "error: x264 was configured without assembly ($1 missing in config.h)" >&2
+    grep -E '^(SYS_ARCH|AS|ASFLAGS|CC|CFLAGS)=' config.mak >&2 || true
+    return 1
   fi
 }
 
