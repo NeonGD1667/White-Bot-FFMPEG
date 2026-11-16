@@ -42,7 +42,7 @@ if [ "$WITH_X264" = "1" ]; then
   ( cd "$WORK/x264-build-win"
     CC=cl run_x264_configure "$X264_SRC/configure" --prefix="$PREFIX" --enable-static --disable-cli --disable-opencl \
       --extra-cflags=-MD
-    make -j"$JOBS" install
+    run_make "$WORK/x264-build-win/make.log" -j"$JOBS" install
     # ffmpeg's MSVC pkg-config check looks for x264.lib
     cp "$PREFIX/lib/libx264.lib" "$PREFIX/lib/x264.lib" )
   FF_FLAGS+=(--pkg-config-flags=--static)
@@ -63,9 +63,10 @@ if ! grep -q '^#define CONFIG_CBS_AV1 1' config.h; then
   exit 1
 fi
 
-make -j"$JOBS"
-make install
+run_make "$WORK/ffmpeg-build-win/make.log" -j"$JOBS"
+run_make "$WORK/ffmpeg-build-win/make-install.log" install
 
-# The msvc toolchain names the archives lib<name>.a; White Bot looks for lib<name>.lib.
+# With the msvc toolchain ffmpeg installs lib<name>.lib (LIBSUF=.lib), not lib<name>.a;
+# collect_libs copies either one to lib<name>.lib, which is what White Bot looks for.
 collect_libs "$PREFIX" windows-x64 lib
 echo "Windows done -> $OUT/lib/windows-x64"

@@ -138,6 +138,19 @@ run_x264_configure() {
   fi
 }
 
+# Runs make with its output kept in a log file (the workflow uploads work/**/*.log when a job fails,
+# configure's config.log does not contain compiler errors). On failure the tail is printed again.
+# run_make <log file> <make arguments...>
+run_make() {
+  local log="$1"
+  shift
+  if ! ( make "$@" 2>&1 | tee "$log" ); then
+    echo "error: make $* failed, last lines of $log:" >&2
+    tail -n 60 "$log" >&2
+    return 1
+  fi
+}
+
 # Fails when x264's configure silently ended up WITHOUT assembly (it would then build, but slowly).
 # x264_require_asm <HAVE_AARCH64 | HAVE_MMX>   (run in the x264 build directory, after configure)
 x264_require_asm() {
@@ -154,7 +167,13 @@ collect_libs() {
   local prefix="$1" target="$2" ext="${3:-a}" l d
   mkdir -p "$OUT/lib/$target" "$OUT/include"
   for l in avformat avcodec avfilter swscale swresample avutil; do
-    cp "$prefix/lib/lib$l.a" "$OUT/lib/$target/lib$l.$ext"
+    # gcc/clang toolchains install lib<name>.a; ffmpeg's MSVC targets (win32/win64) set LIBSUF=.lib
+    # and install lib<name>.lib. Accept either, whatever extension the package should have.
+    if [ -f "$prefix/lib/lib$l.$ext" ]; then
+      cp "$prefix/lib/lib$l.$ext" "$OUT/lib/$target/lib$l.$ext"
+    else
+      cp "$prefix/lib/lib$l.a" "$OUT/lib/$target/lib$l.$ext"
+    fi
   done
   if [ "$WITH_X264" = "1" ]; then
     cp "$prefix/lib/libx264.$ext" "$OUT/lib/$target/" 2>/dev/null || cp "$prefix/lib/libx264.a" "$OUT/lib/$target/libx264.$ext"

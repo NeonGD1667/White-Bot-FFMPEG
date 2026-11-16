@@ -161,8 +161,8 @@ build_arch() {
             # Never build x264 silently without assembly (the "no NEON support" class of problems).
             x264_require_asm "$x264_asm"
 
-            make -j"$JOBS"
-            make install
+            run_make "$x264_build/make.log" -j"$JOBS"
+            run_make "$x264_build/make-install.log" install
         )
 
         export PKG_CONFIG_PATH="$prefix/lib/pkgconfig"
@@ -198,8 +198,8 @@ build_arch() {
 
         echo "Compiling FFmpeg for $arch..."
 
-        make -j"$JOBS"
-        make install
+        run_make "$ffmpeg_build/make.log" -j"$JOBS"
+        run_make "$ffmpeg_build/make-install.log" install
     )
 
     echo "FFmpeg build completed for $arch."
