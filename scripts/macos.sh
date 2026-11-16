@@ -194,7 +194,8 @@ build_arch() {
             --enable-videotoolbox \
             --enable-encoder=h264_videotoolbox,hevc_videotoolbox \
             --extra-cflags="-O3 -I$prefix/include" \
-            --extra-ldflags="$flags -L$prefix/lib"
+            --extra-ldflags="$flags -L$prefix/lib" \
+            2>&1 | tee "$ffmpeg_build/configure.log"
 
         echo "Compiling FFmpeg for $arch..."
 
@@ -213,6 +214,41 @@ build_arch arm64
 build_arch x86_64
 
 # --------------------------------------------------
+# Verify per-arch libs exist before lipo
+# --------------------------------------------------
+
+echo
+echo "======================================"
+echo "Verifying per-arch libraries..."
+echo "======================================"
+
+libs=(avformat avcodec avfilter swscale swresample avutil)
+if [ "$WITH_X264" = "1" ]; then
+    libs+=(x264)
+fi
+
+for lib in "${libs[@]}"; do
+    ARM64_LIB="$WORK/macos-arm64/lib/lib${lib}.a"
+    X86_LIB="$WORK/macos-x86_64/lib/lib${lib}.a"
+
+    if [ ! -f "$ARM64_LIB" ]; then
+        echo "ERROR: Missing arm64 library: $ARM64_LIB"
+        echo "Contents of $WORK/macos-arm64/lib/:"
+        ls -la "$WORK/macos-arm64/lib/" || true
+        exit 1
+    fi
+
+    if [ ! -f "$X86_LIB" ]; then
+        echo "ERROR: Missing x86_64 library: $X86_LIB"
+        echo "Contents of $WORK/macos-x86_64/lib/:"
+        ls -la "$WORK/macos-x86_64/lib/" || true
+        exit 1
+    fi
+
+    echo "  OK: lib${lib}.a (arm64 + x86_64)"
+done
+
+# --------------------------------------------------
 # Create Universal libraries
 # --------------------------------------------------
 
@@ -225,33 +261,10 @@ UNIVERSAL_LIB="$OUT/lib/macos-universal"
 
 mkdir -p "$UNIVERSAL_LIB" "$OUT/include"
 
-libs=(
-    avformat
-    avcodec
-    avfilter
-    swscale
-    swresample
-    avutil
-)
-
-if [ "$WITH_X264" = "1" ]; then
-    libs+=(x264)
-fi
-
 for lib in "${libs[@]}"; do
     ARM64_LIB="$WORK/macos-arm64/lib/lib${lib}.a"
     X86_LIB="$WORK/macos-x86_64/lib/lib${lib}.a"
     OUTPUT_LIB="$UNIVERSAL_LIB/lib${lib}.a"
-
-    if [ ! -f "$ARM64_LIB" ]; then
-        echo "ERROR: Missing arm64 library: $ARM64_LIB"
-        exit 1
-    fi
-
-    if [ ! -f "$X86_LIB" ]; then
-        echo "ERROR: Missing x86_64 library: $X86_LIB"
-        exit 1
-    fi
 
     echo "Merging lib${lib}.a..."
 
@@ -261,6 +274,7 @@ for lib in "${libs[@]}"; do
         -output "$OUTPUT_LIB"
 
     "$LIPO" -verify_arch arm64 x86_64 "$OUTPUT_LIB"
+    echo "  OK: $OUTPUT_LIB"
 done
 
 # --------------------------------------------------
@@ -287,20 +301,21 @@ do
 
     rm -rf "$OUT/include/$dir"
     cp -R "$HEADER_DIR" "$OUT/include/"
+    echo "  OK: $dir"
 done
 
 # --------------------------------------------------
 # Build information
 # --------------------------------------------------
 
-cat > "$OUT/BUILD_INFO.txt" <<EOF
+cat > "$OUT/BUILD_INFO.txt" <<BUILDEOF
 Platform: macOS Universal
 Architectures: arm64, x86_64
 Minimum macOS: $MIN_MAC
 FFmpeg version: ${FFMPEG_VERSION:-unknown}
 x264 enabled: $WITH_X264
 NASM: $(nasm -v)
-EOF
+BUILDEOF
 
 # --------------------------------------------------
 # Finished
@@ -313,3 +328,4 @@ echo "======================================"
 
 echo "Libraries: $UNIVERSAL_LIB"
 echo "Headers:   $OUT/include"
+ls -lh "$UNIVERSAL_LIB/"

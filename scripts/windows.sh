@@ -5,6 +5,9 @@
 # pkgconf, git, curl, tar, xz, diffutils.
 # MSYS2's /usr/bin/link.exe shadows MSVC's link.exe, so the workflow renames it first.
 # Static libs are built for the MSVC ABI with the dynamic CRT (/MD), matching White Bot.
+
+set -Eeuo pipefail
+
 source "$(dirname "$0")/common.sh"
 
 WITH_WIN_HW="${WITH_WIN_HW:-1}"   # 1 = NVENC (nv-codec-headers) + AMD AMF encoders
@@ -52,10 +55,12 @@ export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig"
 
 rm -rf "$WORK/ffmpeg-build-win"; mkdir -p "$WORK/ffmpeg-build-win"
 cd "$WORK/ffmpeg-build-win"
+
 "$FFMPEG_SRC/configure" \
   --prefix="$PREFIX" "${FF_FLAGS[@]}" \
   --toolchain=msvc --target-os=win64 --arch=x86_64 \
-  --extra-cflags="-MD -I$PREFIX/include" --extra-ldflags="-LIBPATH:$PREFIX/lib"
+  --extra-cflags="-MD -I$PREFIX/include" --extra-ldflags="-LIBPATH:$PREFIX/lib" \
+  2>&1 | tee "$WORK/ffmpeg-build-win/configure.log"
 
 # Guard for the cbs.c problem above: stop here, with a clear message, instead of after minutes of make.
 if ! grep -q '^#define CONFIG_CBS_AV1 1' config.h; then
@@ -66,7 +71,41 @@ fi
 run_make "$WORK/ffmpeg-build-win/make.log" -j"$JOBS"
 run_make "$WORK/ffmpeg-build-win/make-install.log" install
 
-# With the msvc toolchain ffmpeg installs lib<name>.lib (LIBSUF=.lib), not lib<name>.a;
-# collect_libs copies either one to lib<name>.lib, which is what White Bot looks for.
+# --------------------------------------------------
+# Verify libs exist before collecting
+# --------------------------------------------------
+# ffmpeg's MSVC toolchain sets LIBPREF= (empty), so libs are installed WITHOUT the "lib" prefix:
+#   avfilter.lib, avformat.lib, ... (not libavfilter.lib)
+# collect_libs in common.sh handles both naming conventions.
+
+echo
+echo "======================================"
+echo "Verifying Windows libraries..."
+echo "======================================"
+
+echo "Contents of $PREFIX/lib/:"
+ls -la "$PREFIX/lib/"
+
+for l in avformat avcodec avfilter swscale swresample avutil; do
+  if [ -f "$PREFIX/lib/lib$l.lib" ]; then
+    echo "  OK (lib prefix): lib$l.lib"
+  elif [ -f "$PREFIX/lib/$l.lib" ]; then
+    echo "  OK (no prefix):  $l.lib"
+  else
+    echo "ERROR: cannot find lib for '$l' in $PREFIX/lib/" >&2
+    exit 1
+  fi
+done
+
+# --------------------------------------------------
+# Collect output
+# --------------------------------------------------
+
+# collect_libs copies either lib<name>.lib or <name>.lib to out/lib/windows-x64/lib<name>.lib
 collect_libs "$PREFIX" windows-x64 lib
+
+echo
+echo "======================================"
 echo "Windows done -> $OUT/lib/windows-x64"
+echo "======================================"
+ls -lh "$OUT/lib/windows-x64/"

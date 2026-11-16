@@ -163,22 +163,40 @@ x264_require_asm() {
 
 # Copies the static libs of one build prefix to out/lib/<target>/ and the headers to out/include/.
 # collect_libs <prefix> <target> [extension, default a]
+#
+# FIX: ffmpeg's MSVC toolchain (--toolchain=msvc) installs libs WITHOUT the "lib" prefix:
+#   avfilter.lib, avformat.lib, ... (not libavfilter.lib, libavformat.lib, ...)
+# We handle both naming conventions so Windows and Unix builds work correctly.
 collect_libs() {
   local prefix="$1" target="$2" ext="${3:-a}" l d
   mkdir -p "$OUT/lib/$target" "$OUT/include"
   for l in avformat avcodec avfilter swscale swresample avutil; do
-    # gcc/clang toolchains install lib<name>.a; ffmpeg's MSVC targets (win32/win64) set LIBSUF=.lib
-    # and install lib<name>.lib. Accept either, whatever extension the package should have.
     if [ -f "$prefix/lib/lib$l.$ext" ]; then
+      # Standard naming: libavformat.a / libavformat.lib (gcc/clang or cross-compiled)
       cp "$prefix/lib/lib$l.$ext" "$OUT/lib/$target/lib$l.$ext"
-    else
+    elif [ -f "$prefix/lib/$l.$ext" ]; then
+      # MSVC naming: avformat.lib (no "lib" prefix — ffmpeg sets LIBPREF= with msvc toolchain)
+      cp "$prefix/lib/$l.$ext" "$OUT/lib/$target/lib$l.$ext"
+    elif [ -f "$prefix/lib/lib$l.a" ]; then
+      # Fallback: copy .a and rename to requested extension
       cp "$prefix/lib/lib$l.a" "$OUT/lib/$target/lib$l.$ext"
+    else
+      echo "error: collect_libs: cannot find lib for '$l' in $prefix/lib/ (tried lib$l.$ext, $l.$ext, lib$l.a)" >&2
+      return 1
     fi
   done
   if [ "$WITH_X264" = "1" ]; then
-    cp "$prefix/lib/libx264.$ext" "$OUT/lib/$target/" 2>/dev/null || cp "$prefix/lib/libx264.a" "$OUT/lib/$target/libx264.$ext"
+    if [ -f "$prefix/lib/libx264.$ext" ]; then
+      cp "$prefix/lib/libx264.$ext" "$OUT/lib/$target/"
+    elif [ -f "$prefix/lib/x264.$ext" ]; then
+      cp "$prefix/lib/x264.$ext" "$OUT/lib/$target/libx264.$ext"
+    else
+      cp "$prefix/lib/libx264.a" "$OUT/lib/$target/libx264.$ext"
+    fi
   fi
   for d in libavcodec libavformat libavutil libavfilter libswscale libswresample; do
-    cp -R "$prefix/include/$d" "$OUT/include/"
+    if [ -d "$prefix/include/$d" ]; then
+      cp -R "$prefix/include/$d" "$OUT/include/"
+    fi
   done
 }
